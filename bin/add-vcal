@@ -15,6 +15,7 @@
 from __future__ import print_function
 
 import argparse
+import codecs
 import httplib2
 import icalendar
 import os.path
@@ -32,14 +33,23 @@ def read_ical_event(f):
     ics_text = content.replace("\nDTSTART:1601", "\nDTSTART:1901")
 
     cal = icalendar.Calendar.from_ical(ics_text)
-    ev = [x for x in cal.subcomponents if x.name == 'VEVENT'][0]
+    return [x for x in cal.subcomponents if x.name == 'VEVENT'][0]
+
+
+def tuple_person(p):
+    return (p.params['CN'], p.replace('MAILTO:', ''))
+
+
+def normalize_iev(ev):
+    ev['ORGANIZER'] = tuple_person(ev['ORGANIZER'])
     attendees = ev['ATTENDEE']
     if not isinstance(attendees, list):
-        ev['ATTENDEE'] = [attendees]
+        attendees = [attendees]
+    ev['ATTENDEE'] = [tuple_person(a) for a in attendees]
     return ev
 
 
-def get_creds():
+def get_creds(flags):
     flow = OAuth2WebServerFlow(
         "23276227116-vq4tg8dd781j9ij9lm6p2asnr2urvc8h"
         ".apps.googleusercontent.com",
@@ -60,7 +70,7 @@ def get_calendar(creds):
     return build('calendar', 'v3', http=http)
 
 
-def datefmt(d):
+def isofmt(d):
     return d.isoformat("T") + "Z"  # FIXME
 
 
@@ -68,25 +78,49 @@ def add_event(service, event):
     return service.events().insert(calendarId='primary', body=event).execute()
 
 
-iev = read_ical_event(sys.stdin)
-request = {
-    'summary': iev['SUMMARY'],
-    'location': iev['LOCATION'],
-    'start': {'dateTime': datefmt(iev['DTSTART'].dt)},
-    'end': {'dateTime': datefmt(iev['DTEND'].dt)},
-    'attendees': [{'displayName': a.params['CN'],
-                   'email': a.replace('MAILTO:', '')}
-                  for a in iev['ATTENDEE']],
-}
+def format_request(ev):
+    datefmt = '%a, %d %b %Y, %H:%M'
+    attendees = "\n".join(("    %s <%s>" % a)
+                          for a in ev['ATTENDEE'])
+    args = {'summary': ev['SUMMARY'],
+            'organizer': "%s <%s>" % ev['ORGANIZER'],
+            'start': ev['DTSTART'].dt.strftime(datefmt),
+            'end': ev['DTEND'].dt.strftime(datefmt),
+            'location': ev['LOCATION'],
+            'attendees': attendees,
+            'description': ev['DESCRIPTION'].strip(), }
+    return """
+Summary:   %(summary)s
+Organizer: %(organizer)s
+Starts at: %(start)s
+Ends at:   %(end)s
+Location:  %(location)s
+Attendees:
+%(attendees)s
 
-# import json
-# print(json.dumps(request))
-# raise SystemExit
+%(description)s
+"""[1:] % args
 
-parser = argparse.ArgumentParser(parents=[tools.argparser])
-flags = parser.parse_args()
-creds = get_creds()
-service = get_calendar(creds)
-gev = add_event(service, request)
 
-# print(gev['id'])
+def main(args):
+    iev = read_ical_event(codecs.getreader("utf-8")(sys.stdin))
+    iev = normalize_iev(iev)
+    request = {
+        'summary': iev['SUMMARY'],
+        'location': iev['LOCATION'],
+        'start': {'dateTime': isofmt(iev['DTSTART'].dt)},
+        'end': {'dateTime': isofmt(iev['DTEND'].dt)},
+        'attendees': [{'displayName': a[0], 'email': a[1]}
+                      for a in iev['ATTENDEE']],
+    }
+
+    parser = argparse.ArgumentParser(parents=[tools.argparser])
+    flags = parser.parse_args()
+    creds = get_creds(flags)
+    service = get_calendar(creds)
+    add_event(service, request)
+    print(format_request(iev))
+
+
+if __name__ == '__main__':
+    main(sys.argv)
