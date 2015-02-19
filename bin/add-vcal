@@ -27,6 +27,8 @@ from oauth2client.file import Storage
 from oauth2client import tools
 
 
+# ######### ICAL ##########
+
 def read_ical_event(f):
     content = f.read()
     # Thanks, https://github.com/dmedvinsky/mutt-ics
@@ -40,42 +42,13 @@ def tuple_person(p):
     return (p.params['CN'], p.replace('MAILTO:', ''))
 
 
-def normalize_iev(ev):
+def normalize_ical(ev):
     ev['ORGANIZER'] = tuple_person(ev['ORGANIZER'])
     attendees = ev['ATTENDEE']
     if not isinstance(attendees, list):
         attendees = [attendees]
     ev['ATTENDEE'] = [tuple_person(a) for a in attendees]
     return ev
-
-
-def get_creds(flags):
-    flow = OAuth2WebServerFlow(
-        "23276227116-vq4tg8dd781j9ij9lm6p2asnr2urvc8h"
-        ".apps.googleusercontent.com",
-        "jCEWeCP8nvGmXnr8LjGlk1MH",
-        'https://www.googleapis.com/auth/calendar',
-        redirect_uri='http://localhost:8080/')
-    storage = Storage(os.path.expanduser('~/.add-vcal.dat'))
-
-    creds = storage.get()
-    if creds is None or creds.invalid:
-        creds = tools.run_flow(flow, storage, flags)
-    return creds
-
-
-def get_calendar(creds):
-    http = httplib2.Http()
-    http = creds.authorize(http)
-    return build('calendar', 'v3', http=http)
-
-
-def isofmt(d):
-    return d.isoformat("T") + "Z"  # FIXME
-
-
-def add_event(service, event):
-    return service.events().insert(calendarId='primary', body=event).execute()
 
 
 def format_request(ev):
@@ -102,26 +75,98 @@ Attendees:
 """[1:] % args
 
 
-def main(args):
-    iev = read_ical_event(codecs.getreader("utf-8")(sys.stdin))
-    iev = normalize_iev(iev)
+# ######### GOOGLE BASE ##########
 
-    # parser = argparse.ArgumentParser(parents=[tools.argparser])
-    # flags = parser.parse_args()
-    # creds = get_creds(flags)
-    # service = get_calendar(creds)
+def get_creds(flags):
+    flow = OAuth2WebServerFlow(
+        "23276227116-vq4tg8dd781j9ij9lm6p2asnr2urvc8h"
+        ".apps.googleusercontent.com",
+        "jCEWeCP8nvGmXnr8LjGlk1MH",
+        'https://www.googleapis.com/auth/calendar',
+        redirect_uri='http://localhost:8080/')
+    storage = Storage(os.path.expanduser('~/.add-vcal.dat'))
 
-    request = {
-        'summary': iev['SUMMARY'],
-        'location': iev['LOCATION'],
-        'start': {'dateTime': isofmt(iev['DTSTART'].dt)},
-        'end': {'dateTime': isofmt(iev['DTEND'].dt)},
+    creds = storage.get()
+    if creds is None or creds.invalid:
+        creds = tools.run_flow(flow, storage, flags)
+    return creds
+
+
+def get_calendar(creds):
+    http = httplib2.Http()
+    http = creds.authorize(http)
+    return build('calendar', 'v3', http=http)
+
+
+def isofmt(d):
+    return d.isoformat("T") + "Z"  # FIXME
+
+
+def dispatch(service, ev):
+    gev = find_event(service, ev)
+    num = len(gev['items'])
+    if num > 1:
+        raise Exception("More than 1 matching event found")
+    if num == 0:
+        if ev['STATUS'] == 'CANCELLED':
+            pass
+        else:
+            add_event(service, ev)
+    else:
+        item = gev['items'][0]
+        if ev['STATUS'] == 'CANCELLED':
+            del_event(service, item)
+
+
+def find_event(service, ev):
+    return service.events().list(
+        calendarId='primary',
+        q=ev['SUMMARY'],
+        timeMin=isofmt(ev['DTSTART'].dt),
+        timeMax=isofmt(ev['DTEND'].dt),
+        ).execute()
+
+
+def add_event(service, ev):
+    body = {
+        'summary': ev['SUMMARY'],
+        'location': ev['LOCATION'],
+        'start': {'dateTime': isofmt(ev['DTSTART'].dt)},
+        'end': {'dateTime': isofmt(ev['DTEND'].dt)},
         'attendees': [{'displayName': a[0], 'email': a[1]}
-                      for a in iev['ATTENDEE']],
+                      for a in ev['ATTENDEE']],
     }
-    # add_event(service, request)
-    desc = format_request(iev)
+    return service.events().insert(calendarId='primary', body=body).execute()
+
+
+def del_event(service, item):
+    return service.events().delete(
+        calendarId='primary',
+        eventId=item['id']).execute()
+
+
+# ######### MAIN ##########
+
+def main(args):
+    ev = read_ical_event(codecs.getreader("utf-8")(sys.stdin))
+    ev = normalize_ical(ev)
+
+    code = 0
+    try:
+        parser = argparse.ArgumentParser(parents=[tools.argparser])
+        flags = parser.parse_args()
+        creds = get_creds(flags)
+        service = get_calendar(creds)
+        dispatch(service, ev)
+    except Exception as e:
+        print("************ EXCEPTION **********")
+        print(e)
+        print("************ EXCEPTION **********")
+        code = 1
+
+    desc = format_request(ev)
     codecs.getwriter("utf-8")(sys.stdout).write(desc)
+    raise SystemExit(code)
 
 
 if __name__ == '__main__':
