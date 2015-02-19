@@ -89,7 +89,7 @@ def format_request(ev):
             'location': ev['LOCATION'],
             'attendees': attendees,
             'description': ev['DESCRIPTION'].strip(), }
-    return """
+    return u"""
 Summary:   %(summary)s
 Organizer: %(organizer)s
 Starts at: %(start)s
@@ -105,6 +105,12 @@ Attendees:
 def main(args):
     iev = read_ical_event(codecs.getreader("utf-8")(sys.stdin))
     iev = normalize_iev(iev)
+
+    # parser = argparse.ArgumentParser(parents=[tools.argparser])
+    # flags = parser.parse_args()
+    # creds = get_creds(flags)
+    # service = get_calendar(creds)
+
     request = {
         'summary': iev['SUMMARY'],
         'location': iev['LOCATION'],
@@ -113,13 +119,9 @@ def main(args):
         'attendees': [{'displayName': a[0], 'email': a[1]}
                       for a in iev['ATTENDEE']],
     }
-
-    parser = argparse.ArgumentParser(parents=[tools.argparser])
-    flags = parser.parse_args()
-    creds = get_creds(flags)
-    service = get_calendar(creds)
-    add_event(service, request)
-    print(format_request(iev))
+    # add_event(service, request)
+    desc = format_request(iev)
+    codecs.getwriter("utf-8")(sys.stdout).write(desc)
 
 
 if __name__ == '__main__':
