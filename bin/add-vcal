@@ -38,16 +38,16 @@ def read_ical_event(f):
     return [x for x in cal.subcomponents if x.name == 'VEVENT'][0]
 
 
-def tuple_person(p):
+def ical2person(p):
     return (p.params['CN'], p.replace('MAILTO:', ''))
 
 
 def normalize_ical(ev):
-    ev['ORGANIZER'] = tuple_person(ev['ORGANIZER'])
+    ev['ORGANIZER'] = ical2person(ev['ORGANIZER'])
     attendees = ev['ATTENDEE']
     if not isinstance(attendees, list):
         attendees = [attendees]
-    ev['ATTENDEE'] = [tuple_person(a) for a in attendees]
+    ev['ATTENDEE'] = [ical2person(a) for a in attendees]
     return ev
 
 
@@ -102,47 +102,39 @@ def isofmt(d):
     return d.isoformat("T") + "Z"  # FIXME
 
 
-def dispatch(service, ev):
-    gev = find_event(service, ev)
-    num = len(gev['items'])
-    if num > 1:
-        raise Exception("More than 1 matching event found")
-    if num == 0:
-        if ev['STATUS'] == 'CANCELLED':
-            pass
-        else:
-            add_event(service, ev)
-    else:
-        item = gev['items'][0]
-        if ev['STATUS'] == 'CANCELLED':
-            del_event(service, item)
+def person2google(p):
+    return {'displayName': p[0], 'email': p[1]}
 
 
-def find_event(service, ev):
-    return service.events().list(
-        calendarId='primary',
-        q=ev['SUMMARY'],
-        timeMin=isofmt(ev['DTSTART'].dt),
-        timeMax=isofmt(ev['DTEND'].dt),
-        ).execute()
+def import_event(service, ev):
+    """Import a VCAL event to Google.
 
+    Timezones are NOT supported! Outlook appears to use non-Olson timezones
+    like "Pacific Standard Time". Times are assumed to be UTC.
 
-def add_event(service, ev):
+    Organizer is not set as Google requires the calendar owner to be either
+    the organizer or an attendee. As imported events are likely to use
+    non-Google email addresses, it's easiest to not set organizer and allow
+    Google to assume the Google user is the organizer.
+
+    Recurrence rules are NOT supported! Yet.
+    """
+
     body = {
+        'iCalUID': ev['UID'],
+        'sequence': ev['SEQUENCE'],
+        'status': ev['STATUS'].lower(),
         'summary': ev['SUMMARY'],
         'location': ev['LOCATION'],
         'start': {'dateTime': isofmt(ev['DTSTART'].dt)},
         'end': {'dateTime': isofmt(ev['DTEND'].dt)},
-        'attendees': [{'displayName': a[0], 'email': a[1]}
-                      for a in ev['ATTENDEE']],
+        # 'recurrence': [],
+        # 'organizer': person2google(ev['ORGANIZER']),
+        'attendees': [person2google(a) for a in ev['ATTENDEE']],
+        'transparency': ev['TRANSP'].lower(),
+        'visibility': ev['CLASS'].lower(),
     }
-    return service.events().insert(calendarId='primary', body=body).execute()
-
-
-def del_event(service, item):
-    return service.events().delete(
-        calendarId='primary',
-        eventId=item['id']).execute()
+    return service.events().import_(calendarId='primary', body=body).execute()
 
 
 # ######### MAIN ##########
@@ -152,12 +144,13 @@ def main(args):
     ev = normalize_ical(ev)
 
     code = 0
+    # raise SystemExit(code)
     try:
         parser = argparse.ArgumentParser(parents=[tools.argparser])
         flags = parser.parse_args()
         creds = get_creds(flags)
         service = get_calendar(creds)
-        dispatch(service, ev)
+        import_event(service, ev)
     except Exception as e:
         print("************ EXCEPTION **********")
         print(e)
