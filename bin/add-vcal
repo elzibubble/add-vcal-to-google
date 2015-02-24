@@ -59,7 +59,7 @@ def format_request(ev):
     msg = []
     msg.append("Summary:   %s" % ev.get('SUMMARY', ''))
     if ev.get('ORGANIZER'):
-        msg.append("Organizer: %s" % ev.get('ORGANIZER'))
+        msg.append("Organizer: %s <%s>" % ev.get('ORGANIZER'))
     msg.append("Starts at: %s" % ev['DTSTART'].dt.strftime(datefmt))
     msg.append("Ends at:   %s" % ev['DTEND'].dt.strftime(datefmt))
     if ev.get('LOCATION'):
