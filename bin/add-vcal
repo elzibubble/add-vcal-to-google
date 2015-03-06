@@ -132,7 +132,7 @@ def import_event(service, ev):
         body['iCalUID'] = ev['SUMMARY']
     body['summary'] = ev['SUMMARY']
     if ev.get('DESCRIPTION'):
-        body['description'] = str(ev['DESCRIPTION'])
+        body['description'] = ev['DESCRIPTION']
     body['start'] = {'dateTime': isofmt(ev['DTSTART'].dt)}
     body['end'] = {'dateTime': isofmt(ev['DTEND'].dt)}
     if ev.get('SEQUENCE'):
