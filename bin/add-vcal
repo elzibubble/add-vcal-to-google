@@ -31,6 +31,8 @@ from oauth2client import tools
 
 def read_ical_event(f):
     content = f.read()
+    if content.strip() == "":
+        raise SystemExit(0)
     # Thanks, https://github.com/dmedvinsky/mutt-ics
     ics_text = content.replace("\nDTSTART:1601", "\nDTSTART:1901")
 
@@ -101,7 +103,8 @@ def get_calendar(creds):
 def isofmt(dt):
     s = dt.isoformat("T")
     if "+" not in s:
-        s += "Z"
+        print("No timezone in: %s", s)
+        raise SystemExit(1)
     return s
 
 
@@ -154,15 +157,20 @@ def import_event(service, ev):
 # ######### MAIN ##########
 
 def main(args):
+    # Get creds up front so I can run this without input to refresh creds
+    parser = argparse.ArgumentParser(parents=[tools.argparser])
+    flags = parser.parse_args()
+    creds = get_creds(flags)
+
     ev = read_ical_event(codecs.getreader("utf-8")(sys.stdin))
     ev = normalize_ical(ev)
 
     code = 0
-    # raise SystemExit(code)
+    if 0:
+        desc = format_request(ev)
+        codecs.getwriter("utf-8")(sys.stdout).write(desc)
+        raise SystemExit(code)
     try:
-        parser = argparse.ArgumentParser(parents=[tools.argparser])
-        flags = parser.parse_args()
-        creds = get_creds(flags)
         service = get_calendar(creds)
         import_event(service, ev)
     except Exception as e:
