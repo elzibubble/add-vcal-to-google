@@ -56,14 +56,12 @@ def normalize_ical(ev):
 
 
 def format_request(ev):
-    datefmt = '%a, %d %b %Y, %H:%M'
-
     msg = []
     msg.append("Summary:   %s" % ev.get('SUMMARY', ''))
     if ev.get('ORGANIZER'):
         msg.append("Organizer: %s <%s>" % ev.get('ORGANIZER'))
-    msg.append("Starts at: %s" % ev['DTSTART'].dt.strftime(datefmt))
-    msg.append("Ends at:   %s" % ev['DTEND'].dt.strftime(datefmt))
+    msg.append("Starts at: %s" % ev['DTSTART'].dt)
+    msg.append("Ends at:   %s" % ev['DTEND'].dt)
     if ev.get('LOCATION'):
         msg.append("Location:  %s" % ev['LOCATION'])
     if len(ev['ATTENDEE']) > 0:
@@ -99,15 +97,6 @@ def get_calendar(creds):
     return build('calendar', 'v3', http=http)
 
 
-# FIXME
-def isofmt(dt):
-    s = dt.isoformat("T")
-    if "+" not in s:
-        print("No timezone in: %s", s)
-        raise SystemExit(1)
-    return s
-
-
 def person2google(p):
     return {'displayName': p[0], 'email': p[1]}
 
@@ -130,14 +119,14 @@ def import_event(service, ev):
     if ev.get('UID'):
         body['iCalUID'] = ev['UID']
     elif ev.get('DTSTAMP'):
-        body['iCalUID'] = isofmt(ev['DTSTAMP'].dt)
+        body['iCalUID'] = ev['DTSTAMP'].dt.isoformat()
     else:
         body['iCalUID'] = ev['SUMMARY']
     body['summary'] = ev['SUMMARY']
     if ev.get('DESCRIPTION'):
         body['description'] = ev['DESCRIPTION']
-    body['start'] = {'dateTime': isofmt(ev['DTSTART'].dt)}
-    body['end'] = {'dateTime': isofmt(ev['DTEND'].dt)}
+    body['start'] = {'dateTime': ev['DTSTART'].dt.isoformat()}
+    body['end'] = {'dateTime': ev['DTEND'].dt.isoformat()}
     if ev.get('SEQUENCE'):
         body['sequence'] = ev['SEQUENCE']
     if ev.get('STATUS'):
