@@ -51,7 +51,7 @@ def normalize_ical(ev):
     attendees = ev.get('ATTENDEE')
     if not isinstance(attendees, list):
         attendees = [attendees]
-    ev['ATTENDEE'] = [ical2person(a) for a in attendees if a]
+    ev['ATTENDEE'] = []  # [ical2person(a) for a in attendees if a]
     return ev
 
 
@@ -101,11 +101,14 @@ def person2google(p):
     return {'displayName': p[0], 'email': p[1]}
 
 
+def isoformat(d):
+    s = d.dt.isoformat()
+    if len(s) == 19:
+        return s + "+00:00"
+    return s
+
 def import_event(service, ev):
     """Import a VCAL event to Google.
-
-    Timezones are NOT supported! Outlook appears to use non-Olson timezones
-    like "Pacific Standard Time". Times are assumed to be UTC.
 
     Organizer is not set as Google requires the calendar owner to be either
     the organizer or an attendee. As imported events are likely to use
@@ -125,8 +128,8 @@ def import_event(service, ev):
     body['summary'] = ev['SUMMARY']
     if ev.get('DESCRIPTION'):
         body['description'] = ev['DESCRIPTION']
-    body['start'] = {'dateTime': ev['DTSTART'].dt.isoformat()}
-    body['end'] = {'dateTime': ev['DTEND'].dt.isoformat()}
+    body['start'] = {'dateTime': isoformat(ev['DTSTART'])}
+    body['end'] = {'dateTime': isoformat(ev['DTEND'])}
     if ev.get('SEQUENCE'):
         body['sequence'] = ev['SEQUENCE']
     if ev.get('STATUS'):
