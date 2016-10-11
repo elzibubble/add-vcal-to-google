@@ -15,11 +15,14 @@
 from __future__ import print_function
 
 import argparse
+import arrow
 import codecs
 import httplib2
 import icalendar
 import os.path
+import pytz
 import sys
+import json
 
 from apiclient.discovery import build
 from oauth2client.client import OAuth2WebServerFlow
@@ -27,17 +30,18 @@ from oauth2client.file import Storage
 from oauth2client import tools
 
 
+LOCAL_TZ_IANA = 'Europe/London'
+
+
 # ######### ICAL ##########
 
-def read_ical_event(f):
+def read_ical(f):
     content = f.read()
     if content.strip() == "":
         raise SystemExit(0)
     # Thanks, https://github.com/dmedvinsky/mutt-ics
-    ics_text = content.replace("\nDTSTART:1601", "\nDTSTART:1901")
-
-    cal = icalendar.Calendar.from_ical(ics_text)
-    return [x for x in cal.subcomponents if x.name == 'VEVENT'][0]
+    content = content.replace("\nDTSTART:1601", "\nDTSTART:1901")
+    return icalendar.Calendar.from_ical(content)
 
 
 def ical2person(p):
@@ -46,22 +50,25 @@ def ical2person(p):
     return (p.params['CN'], p.replace('MAILTO:', ''))
 
 
-def normalize_ical(ev):
+def normalize_ev(ev):
     ev['ORGANIZER'] = ical2person(ev.get('ORGANIZER'))
     attendees = ev.get('ATTENDEE')
     if not isinstance(attendees, list):
         attendees = [attendees]
     ev['ATTENDEE'] = []  # [ical2person(a) for a in attendees if a]
+    tzlocal = arrow.now().tzinfo
+    ev['DTSTART'] = arrow.get(ev['DTSTART'].dt).to(tzlocal).isoformat()
+    ev['DTEND'] = arrow.get(ev['DTEND'].dt).to(tzlocal).isoformat()
     return ev
 
 
-def format_request(ev):
+def format_event(ev):
     msg = []
     msg.append("Summary:   %s" % ev.get('SUMMARY', ''))
     if ev.get('ORGANIZER'):
         msg.append("Organizer: %s <%s>" % ev.get('ORGANIZER'))
-    msg.append("Starts at: %s" % ev['DTSTART'].dt)
-    msg.append("Ends at:   %s" % ev['DTEND'].dt)
+    msg.append("Starts at: %s" % ev['DTSTART'])
+    msg.append("Ends at:   %s" % ev['DTEND'])
     if ev.get('LOCATION'):
         msg.append("Location:  %s" % ev['LOCATION'])
     if len(ev['ATTENDEE']) > 0:
@@ -101,13 +108,7 @@ def person2google(p):
     return {'displayName': p[0], 'email': p[1]}
 
 
-def isoformat(d):
-    s = d.dt.isoformat()
-    if len(s) == 19:
-        return s + "+00:00"
-    return s
-
-def import_event(service, ev):
+def mk_request(ev):
     """Import a VCAL event to Google.
 
     Organizer is not set as Google requires the calendar owner to be either
@@ -115,7 +116,8 @@ def import_event(service, ev):
     non-Google email addresses, it's easiest to not set organizer and allow
     Google to assume the Google user is the organizer.
 
-    Recurrence rules are NOT supported! Yet.
+    Attendees are unset because then if you try to change the event in Google
+    Calendar, it asks if you want to notify attendees, which I never do.
     """
 
     body = {}
@@ -128,22 +130,27 @@ def import_event(service, ev):
     body['summary'] = ev['SUMMARY']
     if ev.get('DESCRIPTION'):
         body['description'] = ev['DESCRIPTION']
-    body['start'] = {'dateTime': isoformat(ev['DTSTART'])}
-    body['end'] = {'dateTime': isoformat(ev['DTEND'])}
+    body['start'] = {'dateTime': ev['DTSTART'], 'timeZone': LOCAL_TZ_IANA}
+    body['end'] = {'dateTime': ev['DTEND'], 'timeZone': LOCAL_TZ_IANA}
     if ev.get('SEQUENCE'):
         body['sequence'] = ev['SEQUENCE']
     if ev.get('STATUS'):
         body['status'] = ev['STATUS'].lower()
     if ev.get('LOCATION'):
         body['location'] = ev['LOCATION']
-    body['attendees'] = [person2google(a) for a in ev['ATTENDEE']]
+#      body['attendees'] = [person2google(a) for a in ev['ATTENDEE']]
+#      body['organizer'] = person2google(ev['ORGANIZER'])
     if ev.get('TRANSP'):
         body['transparency'] = ev['TRANSP'].lower()
     if ev.get('CLASS'):
         body['visibility'] = ev['CLASS'].lower()
-    # body['recurrence'] = []
-    # body['organizer'] = person2google(ev['ORGANIZER'])
-    return service.events().import_(calendarId='primary', body=body).execute()
+    body['recurrence'] = []
+    for label in ['RRULE', 'EXRULE', 'RDATE', 'EXDATE']:
+        detail = ev.get(label)
+        if not detail:
+            continue
+        body['recurrence'].append("%s:%s" % (label, detail.to_ical()))
+    return body
 
 
 # ######### MAIN ##########
@@ -151,30 +158,31 @@ def import_event(service, ev):
 def main(args):
     # Get creds up front so I can run this without input to refresh creds
     parser = argparse.ArgumentParser(parents=[tools.argparser])
-    flags = parser.parse_args()
-    creds = get_creds(flags)
+    parser.add_argument('--dump', action='store_true',
+                        help='Just dump the event, don\'t add to Google')
+    args = parser.parse_args()
+    creds = None
+    if not args.dump:
+        creds = get_creds(args)
 
-    ev = read_ical_event(codecs.getreader("utf-8")(sys.stdin))
-    ev = normalize_ical(ev)
+    cal = read_ical(codecs.getreader("utf-8")(sys.stdin))
+    ev = normalize_ev(cal.walk('VEVENT')[0])
 
-    code = 0
-    if 0:
-        desc = format_request(ev)
-        codecs.getwriter("utf-8")(sys.stdout).write(desc)
-        raise SystemExit(code)
     try:
-        service = get_calendar(creds)
-        import_event(service, ev)
+        req = mk_request(ev)
+        if args.dump:
+            codecs.getwriter("utf-8")(sys.stdout).write(json.dumps(req))
+        else:
+            service = get_calendar(creds)
+            service.events().import_(calendarId='primary', body=req).execute()
     except Exception as e:
         print("************ EXCEPTION **********")
         print(e)
         print("************ EXCEPTION **********")
-        code = 1
         raise
-
-    desc = format_request(ev)
-    codecs.getwriter("utf-8")(sys.stdout).write(desc)
-    raise SystemExit(code)
+    finally:
+        desc = format_event(ev)
+        codecs.getwriter("utf-8")(sys.stdout).write(desc)
 
 
 if __name__ == '__main__':
